@@ -1,42 +1,30 @@
 import Phaser from 'phaser';
 import { UI_DEPTH } from '../data/gameSettings';
-import { getTimerDigitFrames } from './timerDigits';
+import { panel, text, UI } from './theme';
 
 export class GameSidebar extends Phaser.GameObjects.Container {
-  private readonly timeDigits: Phaser.GameObjects.Sprite[];
-  private readonly fpsText: Phaser.GameObjects.Text;
+  private readonly timeText: Phaser.GameObjects.Text;
+  private readonly opponentsText: Phaser.GameObjects.Text;
 
-  constructor(scene: Phaser.Scene) {
+  constructor(scene: Phaser.Scene, private readonly totalOpponents = 1) {
     super(scene, 0, 0);
     scene.add.existing(this);
     this.setDepth(UI_DEPTH.sidebar);
-
-    // vis bnb.js 用四个 Number.png 位图显示时间，冒号已经画在 BG.png 中。
-    const positions = [708, 720, 742, 754];
-    this.timeDigits = positions.map((x) => new Phaser.GameObjects.Sprite(
-      scene,
-      x,
-      43,
-      'vis-number',
-      0,
-    ).setOrigin(0, 0));
-
-    // vis 的 Label 没有指定 Font，浏览器 Canvas 使用默认 10px sans-serif。
-    // fillText 的 y=20 是文字基线，Phaser 顶边换算到约 y=10。
-    this.fpsText = new Phaser.GameObjects.Text(scene, 700, 10, 'FPS: 0', {
-      color: '#ffffff',
-      fontFamily: 'sans-serif',
-      fontSize: '10px',
-    }).setOrigin(0, 0);
-
-    this.add([...this.timeDigits, this.fpsText]);
+    const left = panel(scene, 14, 70, 174, 42, 0xffffff, 14);
+    const right = panel(scene, 198, 70, 202, 42, 0xffffff, 14);
+    const clock = scene.add.graphics().lineStyle(2, UI.teal)
+      .strokeCircle(35, 91, 8).lineBetween(35, 85, 35, 91).lineBetween(35, 91, 39, 94);
+    this.timeText = text(scene, 52, 91, '01:30', 26, UI.ink, true).setOrigin(0, 0.5);
+    const timeLabel = text(scene, 172, 91, '剩余', 16, UI.muted).setOrigin(1, 0.5);
+    const dot = scene.add.circle(218, 91, 5, 0xf2b751);
+    this.opponentsText = text(scene, 234, 91, `对手  ${totalOpponents} / ${totalOpponents}`, 18, UI.ink, true).setOrigin(0, 0.5);
+    this.add([left, right, clock, this.timeText, timeLabel, dot, this.opponentsText]);
   }
 
-  update(remainingSeconds: number): void {
-    getTimerDigitFrames(remainingSeconds).forEach((frame, index) => {
-      this.timeDigits[index].setFrame(frame);
-    });
-    const fps = Math.round(this.scene.game.loop.actualFps * 10) / 10;
-    this.fpsText.setText(`FPS: ${fps}`);
+  update(remainingSeconds: number, bots = this.totalOpponents): void {
+    const seconds = Math.max(0, Math.ceil(remainingSeconds));
+    this.timeText.setText(`${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`);
+    this.timeText.setColor(seconds <= 15 ? '#dc6b43' : UI.ink);
+    this.opponentsText.setText(`对手  ${bots} / ${this.totalOpponents}`);
   }
 }

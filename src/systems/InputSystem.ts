@@ -21,6 +21,8 @@ export class InputSystem implements MovementInput, BombInput {
   private readonly keys: Record<keyof typeof INPUT_BINDINGS, Phaser.Input.Keyboard.Key[]>;
   private readonly directionStack: DirectionName[] = [];
   private bombPressed = false;
+  private touchDirection: MovementDirection = { x: 0, y: 0 };
+  private touchMovement: MovementDirection = { x: 0, y: 0 };
 
   constructor(scene: Phaser.Scene) {
     const keyboard = scene.input.keyboard;
@@ -48,9 +50,35 @@ export class InputSystem implements MovementInput, BombInput {
         this.bombPressed = true;
       });
     });
+
+    scene.game.events.on(Phaser.Core.Events.BLUR, this.reset, this);
+    scene.game.events.on(Phaser.Core.Events.HIDDEN, this.reset, this);
+    scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      scene.game.events.off(Phaser.Core.Events.BLUR, this.reset, this);
+      scene.game.events.off(Phaser.Core.Events.HIDDEN, this.reset, this);
+      Object.values(this.keys).flat().forEach((key) => keyboard.removeKey(key, true));
+      this.reset();
+    });
+  }
+
+  setTouchInput(direction: MovementDirection, movement: MovementDirection = direction): void {
+    this.touchDirection = { ...direction };
+    this.touchMovement = { ...movement };
+  }
+
+  pressBomb(): void {
+    this.bombPressed = true;
+  }
+
+  reset(): void {
+    this.touchDirection = { x: 0, y: 0 };
+    this.touchMovement = { x: 0, y: 0 };
+    this.directionStack.length = 0;
+    this.bombPressed = false;
   }
 
   readGridDirection(): MovementDirection {
+    if (this.touchDirection.x || this.touchDirection.y) return { ...this.touchDirection };
     const direction = this.directionStack[this.directionStack.length - 1];
     if (direction === 'left') return { x: -1, y: 0 };
     if (direction === 'right') return { x: 1, y: 0 };
@@ -64,6 +92,7 @@ export class InputSystem implements MovementInput, BombInput {
   }
 
   readMovementVector(): MovementDirection {
+    if (this.touchMovement.x || this.touchMovement.y) return { ...this.touchMovement };
     let x = 0;
     let y = 0;
     for (const direction of this.directionStack) {

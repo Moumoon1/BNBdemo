@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { MapState } from '../data/MapState';
-import { getBotSpawnPosition, getSecondBotSpawnPosition } from '../data/botSettings';
+import { GROUND_EDGE } from '../data/ground';
+import { getBotSpawnPosition } from '../data/botSettings';
 import { AUDIO_SETTINGS } from '../data/audioSettings';
-import { BOT_VISUAL_SETTINGS, SECOND_BOT_VISUAL_SETTINGS } from '../data/characterSettings';
-import { GAME_SETTINGS } from '../data/gameSettings';
-import { MAP_DATA } from '../data/mapData';
+import { getOpponentDefinition, type OpponentDefinition } from '../data/opponents';
+import { GAME_SETTINGS, MOBILE_LAYOUT } from '../data/gameSettings';
+import { getMapDefinition, type MapDefinition } from '../data/maps';
 import { getPlayerSpawnPosition } from '../data/playerSettings';
 import { Bot } from '../entities/Bot';
 import { Player } from '../entities/Player';
@@ -23,12 +24,12 @@ import { MovementSystem } from '../systems/MovementSystem';
 import { CrateSystem } from '../systems/CrateSystem';
 import { BackgroundMusic } from '../systems/BackgroundMusic';
 import { ItemSystem } from '../systems/ItemSystem';
-import { GameSidebar } from '../ui/GameSidebar';
-import { ResultPanel } from '../ui/ResultPanel';
 
 export class GameScene extends Phaser.Scene {
   private readonly depthSortSystem = new DepthSortSystem();
   private mapState!: MapState;
+  private selectedMap!: MapDefinition;
+  private selectedOpponent!: OpponentDefinition;
   private mapRenderer!: MapRenderer;
   private player!: Player;
   private bots: Bot[] = [];
@@ -43,14 +44,19 @@ export class GameScene extends Phaser.Scene {
   private itemSystem!: ItemSystem;
   private crateSystem!: CrateSystem;
   private backgroundMusic!: BackgroundMusic;
-  private gameSidebar!: GameSidebar;
-  private resultPanel!: ResultPanel;
   private gameOver = false;
   private remainingSeconds: number = GAME_SETTINGS.roundDurationSeconds;
   private simulationAccumulatorMs = 0;
 
   constructor() {
     super('GameScene');
+  }
+
+  init(data: { mapId?: string; opponentId?: string } = {}): void {
+    this.selectedMap = getMapDefinition(data.mapId ?? this.registry.get('selectedMapId'));
+    this.registry.set('selectedMapId', this.selectedMap.id);
+    this.selectedOpponent = getOpponentDefinition(data.opponentId ?? this.registry.get('selectedOpponentId'));
+    this.registry.set('selectedOpponentId', this.selectedOpponent.id);
   }
 
   create(): void {
@@ -60,6 +66,12 @@ export class GameScene extends Phaser.Scene {
     this.remainingSeconds = GAME_SETTINGS.roundDurationSeconds;
     this.simulationAccumulatorMs = 0;
 
+    this.cameras.main
+      .setViewport(MOBILE_LAYOUT.mapX, MOBILE_LAYOUT.mapY, MOBILE_LAYOUT.mapWidth, MOBILE_LAYOUT.mapHeight)
+      .setZoom(MOBILE_LAYOUT.mapZoom)
+      .centerOn(MOBILE_LAYOUT.mapCenterX, MOBILE_LAYOUT.mapCenterY)
+      .setBackgroundColor(GROUND_EDGE);
+
     this.backgroundMusic = new BackgroundMusic(
       this,
       AUDIO_SETTINGS.gameMusicKey,
@@ -68,16 +80,13 @@ export class GameScene extends Phaser.Scene {
     this.backgroundMusic.play();
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.backgroundMusic.stop());
 
-    this.mapState = new MapState(MAP_DATA);
+    this.mapState = new MapState(this.selectedMap.tiles);
     this.mapRenderer = new MapRenderer(this);
     this.mapRenderer.render(this.mapState.getSnapshot());
 
     this.player = new Player(this, getPlayerSpawnPosition());
     this.player.playStart();
-    this.bots = [
-      new Bot(this, getBotSpawnPosition(), BOT_VISUAL_SETTINGS),
-      new Bot(this, getSecondBotSpawnPosition(), SECOND_BOT_VISUAL_SETTINGS),
-    ];
+    this.bots = [new Bot(this, getBotSpawnPosition(), this.selectedOpponent.visual)];
     this.bots.forEach((bot) => bot.setFacing({ x: 0, y: 1 }));
     this.inputSystem = new InputSystem(this);
     this.botControllers = this.bots.map(() => new BotController());
@@ -129,14 +138,14 @@ export class GameScene extends Phaser.Scene {
       bot,
       this.player,
       this.botControllers[index],
-      new BotBrain(),
+      new BotBrain(this.selectedOpponent.style),
       this.mapState,
       this.bombSystem,
       this.itemSystem,
       this.explosionSystem,
     ));
-    this.gameSidebar = new GameSidebar(this);
-    this.resultPanel = new ResultPanel(this, () => this.scene.restart());
+    this.scene.launch('GameUIScene', { game: this, input: this.inputSystem, player: this.player, map: this.selectedMap, opponent: this.selectedOpponent, opponentCount: this.bots.length });
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scene.stop('GameUIScene'));
   }
 
   update(_time: number, delta: number): void {
@@ -151,7 +160,7 @@ export class GameScene extends Phaser.Scene {
     // 标签页被切到后台时，浏览器可能一次性给出很大的 delta；不能让
     // 一次渲染暂停直接把整局倒计时扣完。
     this.remainingSeconds = Math.max(0, this.remainingSeconds - Math.min(delta, 100) / 1000);
-    this.gameSidebar.update(this.remainingSeconds);
+    this.events.emit('round-update', this.remainingSeconds, this.bots.filter((bot) => bot.isAlive()).length);
 
   }
 
@@ -176,7 +185,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.player.isAlive() && this.player.isDeathAnimationComplete()) {
       this.finishRound('被困住后淘汰');
     } else if (this.bots.every((bot) => !bot.isAlive() && bot.isDeathAnimationComplete())) {
-      this.finishRound('击败全部机器人');
+      this.finishRound('击败对手');
     } else if (
       this.player.isAlive()
       && this.bots.some((bot) => bot.isAlive())
@@ -197,6 +206,7 @@ export class GameScene extends Phaser.Scene {
     // 模拟停止后 ExplosionSystem 不会再收到 updateTick；必须在结算前
     // 主动销毁未结束的蓝色十字，否则最后一帧会永久留在地图上。
     this.explosionSystem.clear();
-    this.resultPanel.show(message);
+    this.inputSystem.reset();
+    this.events.emit('round-end', message);
   }
 }

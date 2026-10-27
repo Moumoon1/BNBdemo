@@ -21,11 +21,11 @@ export class MenuScene extends Phaser.Scene {
     this.input.once('pointerdown', () => this.backgroundMusic.play());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.backgroundMusic.stop());
 
-    new MenuPanel(this, () => {
+    new MenuPanel(this, (mapId, opponentId) => {
       // 绑定到开始按钮自身的 pointerdown：这是浏览器认可的用户手势，
       // 比仅依赖场景初始化时的自动播放更可靠，尤其是在作品集 iframe 中。
       this.backgroundMusic.play();
-      this.scene.start('GameScene');
+      this.scene.start('GameScene', { mapId, opponentId });
     });
   }
 }

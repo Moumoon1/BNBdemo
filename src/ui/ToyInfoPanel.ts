@@ -56,7 +56,7 @@ export class ToyInfoPanel extends Phaser.GameObjects.Container {
     const labelText = new Phaser.GameObjects.Text(scene, 14, y, label, {
       color: SIDEBAR_THEME.mutedTextColor,
       fontFamily: 'system-ui, sans-serif',
-      fontSize: '11px',
+      fontSize: '12px',
     });
     const valueText = new Phaser.GameObjects.Text(scene, width - 14, y, value, {
       color: SIDEBAR_THEME.textColor,

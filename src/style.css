@@ -1,46 +1,43 @@
 :root {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #f8fafc;
-  background: #fff;
+  background: #dae5f2;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
-html,
-body {
-  min-width: 320px;
-  min-height: 100%;
+html, body {
+  width: 100%;
+  height: 100%;
   margin: 0;
-  background: #fff;
-}
-
-body {
-  min-height: 100vh;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 #game-shell {
   display: grid;
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   place-items: center;
-  background: #fff;
 }
 
 #game-container {
-  width: min(100%, 800px);
-  aspect-ratio: 4 / 3;
+  /* Fit the 414 × 896 canvas in both dimensions, including browser chrome. */
+  width: min(100%, 414px, calc((100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * 414 / 896));
+  width: min(100%, 414px, calc((100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * 414 / 896));
+  aspect-ratio: 414 / 896;
   overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 #game-container canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  touch-action: none;
 }

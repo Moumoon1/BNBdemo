@@ -2,6 +2,7 @@ import { BOT_SETTINGS } from '../data/botSettings';
 import { BOMB_SETTINGS } from '../data/bombSettings';
 import { GAME_SETTINGS, MAP_SETTINGS } from '../data/gameSettings';
 import { MapState } from '../data/MapState';
+import type { BotStyle } from '../data/opponents';
 import { computeFlameCells } from '../domain/bombRules';
 import { gridKey, gridToWorldCenter, type GridPosition } from '../domain/coordinates';
 import type { Bot } from '../entities/Bot';
@@ -73,6 +74,9 @@ export class BotBrain {
   private decisionTick = 0;
   private blockedFeedbackTicks = 0;
   private readonly failedDirections = new Map<string, Map<DirectionKey, number>>();
+  private lastPlanTick = 0;
+
+  constructor(private readonly style: BotStyle = 'balanced') {}
 
   decide(world: BotWorldState): BotAction {
     this.decisionTick += 1;
@@ -111,7 +115,12 @@ export class BotBrain {
       this.mode = 'navigate';
     }
 
-    if (!this.path.length) {
+    // Only reconsider at cell centers: changing routes mid-cell causes wall clipping
+    // and oscillation. Escape routes are never interrupted by an attack opportunity.
+    const center = gridToWorldCenter(current.x, current.y);
+    const centered = Math.abs(bot.x - center.x) <= 0.1 && Math.abs(bot.y - center.y) <= 0.1;
+    if (centered) {
+      while (this.path[0]?.x === current.x && this.path[0]?.y === current.y) this.path.shift();
       const bombAction = this.tryPlanBomb(
         world,
         current,
@@ -120,12 +129,17 @@ export class BotBrain {
       );
       if (bombAction) return bombAction;
 
+      if (this.decisionTick - this.lastPlanTick >= BOT_SETTINGS.objectiveRefreshTicks) this.resetPath();
+    }
+
+    if (!this.path.length) {
       const blocked = new Set([...dangerDeadlines.keys(), ...explosion]);
       const failedDirections = this.getFailedDirections(currentKey);
       this.path = this.findObjective(world, current, blocked, failedDirections)
         ?? this.randomStep(world, current, blocked, failedDirections)
         ?? [];
       this.mode = 'navigate';
+      this.lastPlanTick = this.decisionTick;
     }
 
     return this.createMovementAction(bot, false);
@@ -175,13 +189,20 @@ export class BotBrain {
       return undefined;
     }
 
-    const nearSoft = DIRECTIONS.some(({ x, y }) =>
-      world.mapState.isDestructibleCell(current.x + x, current.y + y));
+    const cells = computeFlameCells(world.mapState, current.x, current.y, world.bot.getStats().getBlastRange());
+    const nearSoft = cells.some(({ gridX, gridY }) => world.mapState.isDestructibleCell(gridX, gridY));
     const targetGrid = world.target.getGridPosition();
     const nearTarget = world.target.isAlive()
       && !world.target.isTrapped()
-      && Math.abs(targetGrid.x - current.x) + Math.abs(targetGrid.y - current.y) <= 2;
+      && cells.some(({ gridX, gridY }) => gridX === targetGrid.x && gridY === targetGrid.y);
     if (!nearSoft && !nearTarget) return undefined;
+
+    // Finish a trapped opponent by contact, and collect nearby upgrades before
+    // spending another bomb on scenery. Do not detonate an item we can pick up.
+    if (world.target.isAlive() && world.target.isTrapped()) return undefined;
+    const blocked = new Set([...dangerDeadlines.keys(), ...explosion]);
+    if ((!nearTarget || this.style === 'balanced')
+      && this.findNearbyItem(world, current, blocked, this.getFailedDirections(currentKey))?.length) return undefined;
 
     // 把尚未落地的泡泡加入时间模型。它的未来火线可以在爆炸前穿过，
     // 但路径必须在 fuse - margin 之前完整离开火线。
@@ -211,20 +232,23 @@ export class BotBrain {
     blockedFirstDirections: ReadonlySet<DirectionKey>,
   ): GridPosition[] | undefined {
     const targetGrid = world.target.getGridPosition();
-    const itemGoal = (x: number, y: number) =>
-      world.items.some((item) => item.gridX === x && item.gridY === y);
     const enemyGoal = (x: number, y: number) =>
       world.target.isAlive()
       && targetGrid.x === x
       && targetGrid.y === y;
-    const softGoal = (x: number, y: number) =>
-      DIRECTIONS.some(({ x: dx, y: dy }) => world.mapState.isDestructibleCell(x + dx, y + dy));
-    const targetDistance = Math.abs(targetGrid.x - current.x) + Math.abs(targetGrid.y - current.y);
-    const shouldChaseTarget = world.target.isAlive()
-      && (world.target.isTrapped() || targetDistance <= 8);
-    const goals = shouldChaseTarget
-      ? [enemyGoal, softGoal, itemGoal]
-      : [softGoal, itemGoal, enemyGoal];
+    const blastAt = (x: number, y: number) => computeFlameCells(world.mapState, x, y, world.bot.getStats().getBlastRange());
+    const attackGoal = (x: number, y: number) => world.target.isAlive()
+      && blastAt(x, y).some((cell) => cell.gridX === targetGrid.x && cell.gridY === targetGrid.y);
+    const softGoal = (x: number, y: number) => blastAt(x, y)
+      .some((cell) => world.mapState.isDestructibleCell(cell.gridX, cell.gridY));
+    const nearbyItem = this.findNearbyItem(world, current, blocked, blockedFirstDirections);
+    if (world.target.isAlive() && world.target.isTrapped()) {
+      const finish = this.bfs(world, current.x, current.y, enemyGoal, { blocked, blockedFirstDirections });
+      if (finish?.length) return finish;
+    }
+    if (this.style === 'balanced' && nearbyItem?.length) return nearbyItem;
+
+    const goals = [attackGoal, softGoal];
 
     for (const goal of goals) {
       const path = this.bfs(world, current.x, current.y, goal, {
@@ -233,8 +257,21 @@ export class BotBrain {
         blockedFirstDirections,
       });
       if (path?.length) return path;
+      if (goal === attackGoal && nearbyItem?.length) return nearbyItem;
     }
     return undefined;
+  }
+
+  private findNearbyItem(
+    world: BotWorldState,
+    current: GridPosition,
+    blocked: ReadonlySet<string>,
+    blockedFirstDirections?: ReadonlySet<DirectionKey>,
+  ): GridPosition[] | undefined {
+    if (!world.items.length) return undefined;
+    return this.bfs(world, current.x, current.y,
+      (x, y) => world.items.some((item) => item.gridX === x && item.gridY === y),
+      { blocked, maxDepth: 4, blockedFirstDirections });
   }
 
   private randomStep(
